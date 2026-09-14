@@ -2,12 +2,19 @@ import argparse
 import gzip
 import json
 import os
+import time
+
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
+
 from dotenv import load_dotenv
 from google.cloud import storage
+
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
 
 
 # ============================================================
@@ -17,11 +24,11 @@ from google.cloud import storage
 DATASET_ID = "erm2-nwe9"
 
 SOCRATA_API_URL = (
-    f"https://data.cityofnewyork.us/"
-    f"api/v3/views/{DATASET_ID}/query.json"
+    "https://data.cityofnewyork.us/"
+    "resource/erm2-nwe9.json"
 )
 
-PAGE_SIZE = 5000
+PAGE_SIZE = 50000
 
 
 # ============================================================
@@ -38,6 +45,46 @@ GCS_RAW_PREFIX = os.getenv(
     "GCS_RAW_PREFIX",
     "raw/finpro_elvita/nyc311",
 )
+
+
+def create_http_session():
+
+    retry_strategy = Retry(
+        total=5,
+        connect=3,
+        read=3,
+        status=5,
+
+        backoff_factor=5,
+
+        status_forcelist=[
+            429,
+            500,
+            502,
+            503,
+            504,
+        ],
+
+        allowed_methods=[
+            "GET",
+        ],
+
+        respect_retry_after_header=True,
+        raise_on_status=False,
+    )
+
+    adapter = HTTPAdapter(
+        max_retries=retry_strategy
+    )
+
+    session = requests.Session()
+
+    session.mount(
+        "https://",
+        adapter,
+    )
+
+    return session
 
 
 # ============================================================
@@ -95,7 +142,15 @@ def build_query(target_date):
 
 def extract_nyc311(target_date):
 
-    query = build_query(target_date)
+    next_date = target_date + timedelta(days=1)
+
+    start_datetime = (
+        f"{target_date.isoformat()}T00:00:00.000"
+    )
+
+    end_datetime = (
+        f"{next_date.isoformat()}T00:00:00.000"
+    )
 
     local_directory = (
         Path("tmp")
@@ -116,22 +171,22 @@ def extract_nyc311(target_date):
 
     headers = {
         "Accept": "application/json",
-        "Content-Type": "application/json",
         "X-App-Token": SOCRATA_APP_TOKEN,
     }
 
-    page_number = 1
+    session = create_http_session()
+
     total_rows = 0
+    offset = 0
+    page_number = 1
 
     print("=" * 70)
     print("FINPRO ELVITA - NYC 311 EXTRACT")
     print("=" * 70)
-    print(f"Dataset : {DATASET_ID}")
-    print(f"Date    : {target_date}")
-    print(f"Page    : {PAGE_SIZE}")
-    print()
-    print("Query:")
-    print(query)
+
+    print(f"Dataset   : {DATASET_ID}")
+    print(f"Date      : {target_date}")
+    print(f"Page size : {PAGE_SIZE}")
     print()
 
     with gzip.open(
@@ -142,35 +197,53 @@ def extract_nyc311(target_date):
 
         while True:
 
-            payload = {
-                "query": query,
-                "page": {
-                    "pageNumber": page_number,
-                    "pageSize": PAGE_SIZE,
-                },
-                "includeSynthetic": False,
+            params = {
+
+                "$where": (
+                    f"created_date >= "
+                    f"'{start_datetime}' "
+                    f"AND created_date < "
+                    f"'{end_datetime}'"
+                ),
+
+                "$order": (
+                    "created_date ASC, "
+                    "unique_key ASC"
+                ),
+
+                "$limit": PAGE_SIZE,
+
+                "$offset": offset,
             }
 
             print(
-                f"Downloading page {page_number}..."
+                f"Downloading page "
+                f"{page_number}..."
             )
 
-            response = requests.post(
+            response = session.get(
                 SOCRATA_API_URL,
+                params=params,
                 headers=headers,
-                json=payload,
-                timeout=120,
+                timeout=(15, 300),
             )
+
+            if response.status_code == 429:
+
+                retry_after = (
+                    response.headers.get(
+                        "Retry-After"
+                    )
+                )
+
+                raise RuntimeError(
+                    "Socrata rate limit reached. "
+                    f"Retry-After={retry_after}"
+                )
 
             response.raise_for_status()
 
             rows = response.json()
-
-            if not isinstance(rows, list):
-                raise RuntimeError(
-                    "Unexpected Socrata response. "
-                    "Expected JSON array."
-                )
 
             if not rows:
                 break
@@ -182,7 +255,7 @@ def extract_nyc311(target_date):
 
             for row in rows:
 
-                row["_source_dataset_id"] = (
+                row["source_dataset_id"] = (
                     DATASET_ID
                 )
 
@@ -190,7 +263,7 @@ def extract_nyc311(target_date):
                     target_date.isoformat()
                 )
 
-                row["_etl_extracted_at_utc"] = (
+                row["etl_extracted_at_utc"] = (
                     extracted_at
                 )
 
@@ -217,12 +290,16 @@ def extract_nyc311(target_date):
                 f"{total_rows:,} rows"
             )
 
-            print()
-
+            # Daily dataset normally finishes
+            # in one request.
             if row_count < PAGE_SIZE:
                 break
 
+            offset += PAGE_SIZE
             page_number += 1
+
+            # Be courteous to the API
+            time.sleep(2)
 
     if total_rows == 0:
 
@@ -234,6 +311,7 @@ def extract_nyc311(target_date):
             f"{target_date}"
         )
 
+    print()
     print("=" * 70)
     print(
         f"Extraction complete: "

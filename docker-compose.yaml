@@ -1,0 +1,186 @@
+name: finpro-elvita-nyc311
+
+x-airflow-common:
+  &airflow-common
+
+  build:
+    context: .
+    dockerfile: Dockerfile
+
+  env_file:
+    - .env
+
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: >-
+      postgresql+psycopg2://airflow:airflow@postgres/airflow
+
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true" 
+   
+    AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: "120"
+
+    AIRFLOW__CORE__DAG_FILE_PROCESSOR_TIMEOUT: "180"
+
+    AIRFLOW__CORE__FERNET_KEY: ""
+
+    AIRFLOW__WEBSERVER__SECRET_KEY: "finpro-elvita-local-secret"
+
+    AIRFLOW_CONN_GOOGLE_CLOUD_DEFAULT: "google-cloud-platform://"
+
+    GOOGLE_CLOUD_PROJECT: "${GCP_PROJECT_ID}"
+
+    GOOGLE_APPLICATION_CREDENTIALS: >-
+      /opt/airflow/gcp/application_default_credentials.json
+
+    PYTHONPATH: "/opt/airflow"
+
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+    - ./src:/opt/airflow/src
+    - ./sql:/opt/airflow/sql
+
+    - type: bind
+      source: ${GCP_ADC_PATH}
+      target: /opt/airflow/gcp/application_default_credentials.json
+      read_only: true
+
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+
+services:
+
+  # ========================================================
+  # POSTGRESQL - AIRFLOW METADATA DATABASE
+  # ========================================================
+
+  postgres:
+
+    image: postgres:15
+
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+
+    volumes:
+      - airflow-postgres-db:/var/lib/postgresql/data
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U airflow -d airflow"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+    restart: unless-stopped
+
+
+  # ========================================================
+  # AIRFLOW INITIALIZATION
+  # ========================================================
+
+  airflow-init:
+
+    <<: *airflow-common
+
+    command:
+      - bash
+      - -c
+      - |
+        airflow db migrate
+
+        airflow users create \
+          --username airflow \
+          --password airflow \
+          --firstname Elvita \
+          --lastname FinPro \
+          --role Admin \
+          --email airflow@example.com \
+          || true
+
+
+  # ========================================================
+  # AIRFLOW WEBSERVER
+  # ========================================================
+
+  airflow-webserver:
+
+    <<: *airflow-common
+
+    command: webserver
+
+    ports:
+      - "8080:8080"
+
+    depends_on:
+
+      postgres:
+        condition: service_healthy
+
+      airflow-init:
+        condition: service_completed_successfully
+
+    healthcheck:
+
+      test:
+        [
+          "CMD",
+          "curl",
+          "--fail",
+          "http://localhost:8080/health"
+        ]
+
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+    restart: unless-stopped
+
+
+  # ========================================================
+  # AIRFLOW SCHEDULER
+  # ========================================================
+
+  airflow-scheduler:
+
+    <<: *airflow-common
+
+    command: scheduler
+
+    depends_on:
+
+      postgres:
+        condition: service_healthy
+
+      airflow-init:
+        condition: service_completed_successfully
+
+    healthcheck:
+
+      test:
+        [
+          "CMD-SHELL",
+          "airflow jobs check --job-type SchedulerJob --hostname \"$${HOSTNAME}\""
+        ]
+
+      interval: 30s
+      timeout: 60s
+      retries: 5
+      start_period: 60s
+
+    restart: unless-stopped
+
+
+volumes:
+
+  airflow-postgres-db:

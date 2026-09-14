@@ -10,12 +10,12 @@ USING
                 AS unique_key,
 
             SAFE_CAST(
-                CAST(created_date AS STRING)
+                created_date
                 AS DATETIME
             ) AS created_at,
 
             SAFE_CAST(
-                CAST(closed_date AS STRING)
+                closed_date
                 AS DATETIME
             ) AS closed_at,
 
@@ -44,7 +44,7 @@ USING
                 AS status,
 
             SAFE_CAST(
-                CAST(due_date AS STRING)
+                due_date
                 AS DATETIME
             ) AS due_at,
 
@@ -54,10 +54,7 @@ USING
             ) AS resolution_description,
 
             SAFE_CAST(
-                CAST(
-                    resolution_action_updated_date
-                    AS STRING
-                )
+                resolution_action_updated_date
                 AS DATETIME
             ) AS resolution_updated_at,
 
@@ -85,7 +82,7 @@ USING
             ) AS longitude,
 
             CAST(
-                 _source_dataset_id
+                 source_dataset_id
                 AS STRING
             ) AS source_dataset_id,
 
@@ -95,7 +92,7 @@ USING
             ) AS source_partition_date,
 
             SAFE_CAST(
-                CAST(_etl_extracted_at_utc AS STRING)
+                CAST(etl_extracted_at_utc AS STRING)
                 AS TIMESTAMP
             ) AS etl_extracted_at
 
