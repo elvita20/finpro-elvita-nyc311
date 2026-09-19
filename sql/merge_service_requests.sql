@@ -184,7 +184,10 @@ UPDATE SET
         source.etl_extracted_at,
 
     etl_loaded_at =
-        CURRENT_TIMESTAMP()
+        CURRENT_TIMESTAMP(),
+
+    ingestion_source =
+        'batch'
 
 
 WHEN NOT MATCHED THEN
@@ -222,7 +225,8 @@ INSERT
     source_dataset_id,
     source_partition_date,
     etl_extracted_at,
-    etl_loaded_at
+    etl_loaded_at,
+    ingestion_source
 )
 
 VALUES
@@ -260,5 +264,6 @@ VALUES
     source.source_partition_date,
     source.etl_extracted_at,
 
-    CURRENT_TIMESTAMP()
+    CURRENT_TIMESTAMP(),
+    'batch'
 );

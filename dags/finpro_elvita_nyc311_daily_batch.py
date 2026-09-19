@@ -180,9 +180,9 @@ def alert_on_pipeline_failure(context):
         "API -> GCS -> BigQuery Staging -> Warehouse"
     ),
 
-    # Untuk sekarang manual.
-    # Setelah testing sukses kita ubah menjadi daily schedule.
-    schedule=None,
+    # Jadwal harian. Airflow menjalankan run untuk logical_date
+    # = kemarin, dieksekusi setelah hari itu selesai (default 00:00 UTC).
+    schedule="@daily",
 
     start_date=pendulum.datetime(
         2026,
@@ -203,11 +203,14 @@ def alert_on_pipeline_failure(context):
 
     params={
         "target_date": Param(
-            default="2026-08-30",
+            default="",
             type="string",
             description=(
-                "NYC311 Created Date "
-                "in YYYY-MM-DD format"
+                "NYC311 Created Date in YYYY-MM-DD format. "
+                "Kosongkan untuk pakai tanggal logis run ini "
+                "secara otomatis (dipakai saat dijadwalkan "
+                "harian). Isi manual hanya untuk backfill/demo "
+                "tanggal tertentu."
             ),
         ),
     },
@@ -234,8 +237,17 @@ def finpro_elvita_nyc311_daily_batch():
 
         context = get_current_context()
 
-        target_date_string = (
+        target_date_override = (
             context["params"]["target_date"]
+        )
+
+        # Kalau tidak diisi manual (kosong), pakai tanggal
+        # logis run ini ({{ ds }}) -- ini yang bikin jadwal
+        # harian benar-benar memproses hari yang berbeda
+        # setiap kali jalan, bukan tanggal yang sama terus.
+        target_date_string = (
+            target_date_override
+            or context["ds"]
         )
 
         target_date = datetime.strptime(
@@ -496,7 +508,7 @@ def finpro_elvita_nyc311_daily_batch():
                 WHERE
                     source_partition_date =
                     DATE(
-                        '{{{{ params.target_date }}}}'
+                        '{{{{ params.target_date or ds }}}}'
                     )
             ),
 
